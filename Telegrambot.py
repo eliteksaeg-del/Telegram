@@ -78,10 +78,12 @@ def load_all_projects():
                 "ar": str(r.get("Project_AR", "")),
                 "odoo": str(r.get("Odoo", ""))
             })
-        print(f"✅ Loaded {len(data)} cities")
+        print(f"✅ Loaded {len(data)} cities: {list(data.keys())}")
         return data
     except Exception as e:
+        import traceback
         print(f"❌ load_all_projects error: {e}")
+        print(traceback.format_exc())
         return {}
 
 # ================= 5. IN-MEMORY STORE =================
@@ -207,6 +209,7 @@ async def msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         u.update({"name": txt, "step": "city"})
 
         projects = load_all_projects()
+        print(f"DEBUG msg_handler projects keys: {list(projects.keys())}")
         if not projects:
             await update.message.reply_text(
                 "❌ No cities found in the 'Projects' sheet. Check column names (City_EN, City_AR, Project_EN, Project_AR, Odoo)."
