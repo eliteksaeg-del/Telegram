@@ -17,17 +17,20 @@ from telegram.ext import (
 
 # ================= CONFIGURATION =================
 TOKEN = "8468978393:AAH3cp0fA9kltxy5a1kzdfj_NuJwTiVsamA"
-GROUP_CHAT_ID = "-100234567890" # تأكد من وضع الـ ID الصحيح هنا (يبدأ بـ -100)
+GROUP_CHAT_ID = "-100234567890" # تأكد من وضع الـ ID الصحيح هنا
 
 # ================= GOOGLE SHEETS SETUP =================
 def connect_google():
     try:
-        creds_json = os.environ.get("GSPREAD_JSON")
-        if not creds_json:
-            print("❌ GSPREAD_JSON environment variable is empty!")
+        # قراءة النص وتنظيفه من أي مسافات زائدة
+        raw_json = os.environ.get("GSPREAD_JSON", "").strip()
+        
+        if not raw_json:
+            print("❌ GSPREAD_JSON is empty!")
             return None, None
             
-        creds_info = json.loads(creds_json)
+        creds_info = json.loads(raw_json)
+        
         if "private_key" in creds_info:
             creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
         
@@ -52,10 +55,11 @@ def load_projects():
         rows = PROJECTS_SHEET.get_all_records()
         data = {}
         for r in rows:
-            city_en = r["City_EN"]
-            if city_en not in data:
-                data[city_en] = {"en": r["City_EN"], "ar": r["City_AR"], "projects": []}
-            data[city_en]["projects"].append({"en": r["Project_EN"], "ar": r["Project_AR"], "odoo": r["Odoo"]})
+            city_en = r.get("City_EN")
+            if city_en:
+                if city_en not in data:
+                    data[city_en] = {"en": r["City_EN"], "ar": r["City_AR"], "projects": []}
+                data[city_en]["projects"].append({"en": r["Project_EN"], "ar": r["Project_AR"], "odoo": r["Odoo"]})
         return data
     except: return {}
 
@@ -90,8 +94,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["city"] = city
         data["step"] = "project"
         lang = "ar" if data["language"] == "عربي" else "en"
-        buttons = [[InlineKeyboardButton(p[lang], callback_data=f"project|{city}|{p['en']}|{p['odoo']}")] for p in projects[city]["projects"]]
-        await query.message.reply_text("Select Project / اختر المشروع:", reply_markup=InlineKeyboardMarkup(buttons))
+        if city in projects:
+            buttons = [[InlineKeyboardButton(p[lang], callback_data=f"project|{city}|{p['en']}|{p['odoo']}")] for p in projects[city]["projects"]]
+            await query.message.reply_text("Select Project / اختر المشروع:", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif cb.startswith("project|"):
         _, city, project_en, odoo = cb.split("|")
@@ -145,12 +150,14 @@ async def save_report(user_id, context, query):
     )
 
     try:
+        # إرسال للجروب
         if data["photos"]:
             for photo_id in data["photos"]:
                 await context.bot.send_photo(chat_id=GROUP_CHAT_ID, photo=photo_id, caption=caption)
         else:
             await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=f"🔔 Report:\n{caption}")
 
+        # حفظ في الشيت
         if LOG_SHEET:
             row = [date_str, data.get('name'), data.get('username'), user_id, data.get('language'), 
                    data.get('city'), data.get('project'), data.get('odoo'), data.get('work'), 
@@ -165,11 +172,12 @@ async def save_report(user_id, context, query):
 
 # ================= RUN =================
 if __name__ == '__main__':
+    # بناء الـ Application بدون استخدام Updater بشكل يدوي لتفادي خطأ بايثون 3.14
     app = ApplicationBuilder().token(TOKEN).build()
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
     
-    # الطريقة المستقرة للتشغيل في البيئات الحديثة
     print("🤖 Bot is starting...")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling()
