@@ -20,7 +20,7 @@ from telegram.ext import (
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 # ================= CONFIGURATION =================
-TOKEN = "8468978393:AAH3cp0fA9kltxy5a1kzdfj_NuJwTiVsamA"
+TOKEN = "8468978393:AAGS2tu8Xj1O7bUOExicaWPGgFhcokLNLJo"
 GROUP_CHAT_ID = "-5104938886"
 
 # ================= GOOGLE SHEETS SETUP =================
