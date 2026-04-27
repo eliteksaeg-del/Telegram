@@ -9,19 +9,21 @@ from telegram.ext import (
 )
 
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-
+from google.oauth2.service_account import Credentials
 # ========== CONFIG ==========
 BOT_TOKEN = "8468978393:AAGS2tu8Xj1O7bUOExicaWPGgFhcokLNLJo"
 SHEET_NAME = "Daily Summary"
 WORKSHEET_NAME = "Sheet1"
 
 # ========== GOOGLE SHEET SETUP ==========
-scope = ["https://spreadsheets.google.com/feeds",
-         "https://www.googleapis.com/auth/drive"]
+scope = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
-creds = ServiceAccountCredentials.from_json_keyfile_name(
-    "credentials.json", scope
+creds = Credentials.from_service_account_file(
+    "credentials.json",
+    scopes=scope
 )
 
 client = gspread.authorize(creds)
