@@ -1,5 +1,46 @@
 import os
 import json
+import base64
+import gspread
+from google.oauth2.service_account import Credentials
+# ... بقية المكتبات كما هي في كودك ...
+
+# ================= GOOGLE SERVICES (BASE64 VERSION) =================
+scope = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
+# جلب الكود المشفر من ريندر
+encoded_json = os.environ.get("GSPREAD_JSON")
+
+if not encoded_json:
+    print("❌ GSPREAD_JSON is missing!")
+    exit()
+
+try:
+    # فك التشفير
+    decoded_bytes = base64.b64decode(encoded_json)
+    creds_info = json.loads(decoded_bytes)
+    
+    # إصلاح السطور الجديدة (للاحتياط)
+    if "private_key" in creds_info:
+        creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
+        
+    creds = Credentials.from_service_account_info(creds_info, scopes=scope)
+    client = gspread.authorize(creds)
+    
+    # فتح الشيت والدرايف
+    spreadsheet = client.open("Daily Summary")
+    PROJECTS_SHEET = spreadsheet.worksheet("Projects")
+    LOG_SHEET = spreadsheet.sheet1
+    print("✅✅✅ BOT CONNECTED SUCCESSFULLY!")
+except Exception as e:
+    print(f"❌ Connection Error: {e}")
+    exit()
+
+# كمل بقية كود البوت (start, handle_message, etc.) زي ما هوimport os
+import json
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
