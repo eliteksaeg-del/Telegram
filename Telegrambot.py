@@ -19,7 +19,7 @@ from telegram.ext import (
 )
 
 # 1. إعدادات التسجيل
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 # ================= CONFIGURATION =================
 TOKEN = "8468978393:AAGS2tu8Xj1O7bUOExicaWPGgFhcokLNLJo"
@@ -38,37 +38,21 @@ def run_dummy_server():
 def connect_google():
     try:
         raw_json = os.environ.get("GSPREAD_JSON", "").strip()
+        if not raw_json:
+            return None, None
         creds_info = json.loads(raw_json)
         if "private_key" in creds_info:
             creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
         scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(creds_info, scopes=scope)
         client = gspread.authorize(creds)
+        
+        # التأكد من اسم الملف
         spreadsheet = client.open("Daily Summary")
         return spreadsheet.worksheet("Projects"), spreadsheet.sheet1
     except Exception as e:
-        print(f"❌ Google Error: {e}")
+        print(f"❌ Google Connection Error: {e}")
         return None, None
-
-PROJECTS_SHEET, LOG_SHEET = connect_google()
-user_data = {}
-
-def load_projects():
-    if not PROJECTS_SHEET: return {}
-    try:
-        rows = PROJECTS_SHEET.get_all_records()
-        data = {}
-        for r in rows:
-            c_en, c_ar = str(r.get("City_EN")), str(r.get("City_AR"))
-            if c_en not in data:
-                data[c_en] = {"en": c_en, "ar": c_ar, "projects": []}
-            data[c_en]["projects"].append({
-                "en": str(r.get("Project_EN")), 
-                "ar": str(r.get("Project_AR")), 
-                "odoo": str(r.get("Odoo"))
-            })
-        return data
-    except: return {}
 
 # ================= TEXTS DICTIONARY =================
 TEXTS = {
@@ -81,10 +65,8 @@ TEXTS = {
         "ask_photo": "Do you want to upload a photo?",
         "send_photo": "Please send the photo now:",
         "done": "✅ Report saved successfully!",
-        "btn_yes": "Yes 📸",
-        "btn_no": "No ❌",
-        "btn_finish": "✅ Finish",
-        "btn_more": "➕ Add More"
+        "no_proj": "⚠️ No projects found in the 'Projects' sheet!",
+        "btn_yes": "Yes 📸", "btn_no": "No ❌", "btn_finish": "✅ Finish", "btn_more": "➕ Add More"
     },
     "ar": {
         "ask_name": "من فضلك اكتب اسمك:",
@@ -95,12 +77,33 @@ TEXTS = {
         "ask_photo": "هل تريد رفع صورة؟",
         "send_photo": "من فضلك ارسل الصورة الآن:",
         "done": "✅ تم حفظ التقرير بنجاح!",
-        "btn_yes": "نعم 📸",
-        "btn_no": "لا ❌",
-        "btn_finish": "✅ إنهاء",
-        "btn_more": "➕ صورة أخرى"
+        "no_proj": "⚠️ لم يتم العثور على مشاريع في شيت Projects!",
+        "btn_yes": "نعم 📸", "btn_no": "لا ❌", "btn_finish": "✅ إنهاء", "btn_more": "➕ صورة أخرى"
     }
 }
+
+user_data = {}
+
+def get_projects_data():
+    proj_sheet, _ = connect_google()
+    if not proj_sheet: return {}
+    try:
+        rows = proj_sheet.get_all_records()
+        data = {}
+        for r in rows:
+            c_en = str(r.get("City_EN", "")).strip()
+            if c_en:
+                if c_en not in data:
+                    data[c_en] = {"en": c_en, "ar": str(r.get("City_AR", c_en)), "projects": []}
+                data[c_en]["projects"].append({
+                    "en": str(r.get("Project_EN", "")),
+                    "ar": str(r.get("Project_AR", "")),
+                    "odoo": str(r.get("Odoo", ""))
+                })
+        return data
+    except Exception as e:
+        print(f"Error reading rows: {e}")
+        return {}
 
 # ================= HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -114,8 +117,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-    data = user_data.get(user_id)
-    if not data: return
+    if user_id not in user_data: user_data[user_id] = {"photos": []}
+    data = user_data[user_id]
 
     cb = query.data
     lang = data.get("lang", "en")
@@ -123,73 +126,76 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if cb.startswith("lang_"):
         data["lang"] = cb.split("_")[1]
         data["step"] = "name"
-        await query.message.reply_text(TEXTS[data["lang"]]["ask_name"])
+        await query.message.edit_text(TEXTS[data["lang"]]["ask_name"])
 
     elif cb.startswith("city|"):
         city_en = cb.split("|")[1]
         data["city_en"] = city_en
         data["step"] = "project"
-        projects_dict = load_projects()
-        current_lang = data["lang"]
+        all_projs = get_projects_data()
         
         btns = []
-        for p in projects_dict.get(city_en, {}).get("projects", []):
-            label = p[current_lang]
+        for p in all_projs.get(city_en, {}).get("projects", []):
+            label = p[data["lang"]] if p[data["lang"]] else p["en"]
             btns.append([InlineKeyboardButton(label, callback_data=f"proj|{p['en']}|{p['odoo']}")] )
         
-        await query.message.reply_text(TEXTS[current_lang]["ask_project"], reply_markup=InlineKeyboardMarkup(btns))
+        await query.message.edit_text(TEXTS[data["lang"]]["ask_project"], reply_markup=InlineKeyboardMarkup(btns))
 
     elif cb.startswith("proj|"):
         _, p_en, odoo = cb.split("|")
-        data["project_en"] = p_en
-        data["odoo"] = odoo
-        data["step"] = "work"
-        await query.message.reply_text(TEXTS[data["lang"]]["ask_work"])
+        data["project_en"], data["odoo"], data["step"] = p_en, odoo, "work"
+        await query.message.edit_text(TEXTS[data["lang"]]["ask_work"])
 
     elif cb == "photo_yes":
         data["step"] = "uploading"
-        await query.message.reply_text(TEXTS[data["lang"]]["send_photo"])
+        await query.message.edit_text(TEXTS[data["lang"]]["send_photo"])
 
-    elif cb == "photo_no" or cb == "finish":
+    elif cb in ["photo_no", "finish"]:
         await save_report(update, context, data)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    data = user_data.get(user_id)
-    if not data: return
-    
-    step = data.get("step")
+    if user_id not in user_data: return
+    data = user_data[user_id]
     lang = data.get("lang", "en")
 
-    if step == "name":
+    if data.get("step") == "name":
         data["name"] = update.message.text
         data["step"] = "city"
-        projects_dict = load_projects()
-        btns = [[InlineKeyboardButton(v[lang], callback_data=f"city|{k}")] for k, v in projects_dict.items()]
+        all_projs = get_projects_data()
+        if not all_projs:
+            await update.message.reply_text(TEXTS[lang]["no_proj"])
+            return
+        
+        btns = [[InlineKeyboardButton(v[lang], callback_data=f"city|{k}")] for k, v in all_projs.items()]
         await update.message.reply_text(TEXTS[lang]["ask_city"], reply_markup=InlineKeyboardMarkup(btns))
 
-    elif step == "work":
-        data["work"] = update.message.text
-        data["step"] = "issues"
+    elif data.get("step") == "work":
+        data["work"], data["step"] = update.message.text, "issues"
         await update.message.reply_text(TEXTS[lang]["ask_issues"])
 
-    elif step == "issues":
-        data["issues"] = update.message.text
-        data["step"] = "photo_choice"
+    elif data.get("step") == "issues":
+        data["issues"], data["step"] = update.message.text, "photo_choice"
         btns = [[InlineKeyboardButton(TEXTS[lang]["btn_yes"], callback_data="photo_yes"),
                  InlineKeyboardButton(TEXTS[lang]["btn_no"], callback_data="photo_no")]]
         await update.message.reply_text(TEXTS[lang]["ask_photo"], reply_markup=InlineKeyboardMarkup(btns))
 
-    elif step == "uploading" and update.message.photo:
+    elif data.get("step") == "uploading" and update.message.photo:
         data["photos"].append(update.message.photo[-1].file_id)
         btns = [[InlineKeyboardButton(TEXTS[lang]["btn_more"], callback_data="photo_yes"),
                  InlineKeyboardButton(TEXTS[lang]["btn_finish"], callback_data="finish")]]
-        await update.message.reply_text("✅ Done", reply_markup=InlineKeyboardMarkup(btns))
+        await update.message.reply_text("✅ OK", reply_markup=InlineKeyboardMarkup(btns))
 
 async def save_report(update, context, data):
     user_id = update.effective_user.id
     lang = data.get("lang", "en")
-    caption = f"👷‍♂️ Worker: {data.get('name')}\n📍 City: {data.get('city_en')}\n🏗 Project: {data.get('project_en')}\n📝 Work: {data.get('work')}\n⚠️ Issues: {data.get('issues')}"
+    _, log_sheet = connect_google()
+    
+    caption = (f"👷‍♂️ Worker: {data.get('name')}\n"
+               f"📍 City: {data.get('city_en')}\n"
+               f"🏗 Project: {data.get('project_en')}\n"
+               f"📝 Work: {data.get('work')}\n"
+               f"⚠️ Issues: {data.get('issues')}")
     
     try:
         if data["photos"]:
@@ -198,25 +204,22 @@ async def save_report(update, context, data):
         else:
             await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=caption)
         
-        if LOG_SHEET:
-            LOG_SHEET.append_row([datetime.now().strftime("%Y-%m-%d %H:%M"), data.get('name'), "", user_id, lang, data.get('city_en'), data.get('project_en'), data.get('odoo'), data.get('work'), "", data.get('issues'), "", "Sent"])
+        if log_sheet:
+            log_sheet.append_row([datetime.now().strftime("%Y-%m-%d %H:%M"), data.get('name'), "", user_id, lang, data.get('city_en'), data.get('project_en'), data.get('odoo'), data.get('work'), "", data.get('issues'), "", "Sent"])
         
         msg = TEXTS[lang]["done"]
-        if update.callback_query: await update.callback_query.message.reply_text(msg)
+        if update.callback_query: await update.callback_query.message.edit_text(msg)
         else: await update.message.reply_text(msg)
-    except Exception as e:
-        print(f"Error: {e}")
-    
+    except Exception as e: print(f"Save Error: {e}")
     user_data[user_id] = {"photos": []}
 
-# ================= MAIN =================
 async def main():
     threading.Thread(target=run_dummy_server, daemon=True).start()
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
-    
+    print("🚀 Bot is LIVE...")
     async with app:
         await app.initialize()
         await app.start()
