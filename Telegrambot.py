@@ -23,9 +23,9 @@ TOKEN = "8468978393:AAH3cp0fA9kltxy5a1kzdfj_NuJwTiVsamA"
 google_creds_json = os.environ.get("GSPREAD_JSON")
 
 if not google_creds_json:
-    print("❌ Error: GSPREAD_JSON environment variable is not set!")
-else:
-    print("✅ Found Google Credentials")
+    print("❌ Error: GSPREAD_JSON environment variable is not set in Render!")
+    # لو مش موجود هنوقف الكود عشان ميديناش أخطاء تانية
+    exit()
 
 # ================= GOOGLE SERVICES =================
 scope = [
@@ -33,48 +33,56 @@ scope = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-# تحويل النص (JSON string) إلى قاموس (Dictionary) ثم استخدامه
+# تحويل النص إلى قاموس وإصلاح مشكلة الـ Private Key
 creds_info = json.loads(google_creds_json)
+if "private_key" in creds_info:
+    creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
+
 creds = Credentials.from_service_account_info(creds_info, scopes=scope)
 
-# Sheets
+# الاتصال بـ Google Sheets
 client = gspread.authorize(creds)
 spreadsheet = client.open("Daily Summary")
 PROJECTS_SHEET = spreadsheet.worksheet("Projects")
 LOG_SHEET = spreadsheet.sheet1
 
-# Drive
+# الاتصال بـ Google Drive
 drive_service = build("drive", "v3", credentials=creds)
-DRIVE_FOLDER_ID = "1p07wE-O8C-XjAitM71_3q9EizX5x3B4j" # اتأكد إن الـ ID ده صحيح
+DRIVE_FOLDER_ID = "1UXgu-cttomjIOFUER2mqYGqvHD8fDDs-" 
 
-print("BOT STARTED")
+print("✅ BOT CONNECTED TO GOOGLE SERVICES")
 
 # ================= MEMORY =================
 user_data = {}
 
 # ================= LOAD PROJECTS =================
 def load_projects():
-    rows = PROJECTS_SHEET.get_all_records()
-    data = {}
-    for r in rows:
-        city_en = r["City_EN"]
-        if city_en not in data:
-            data[city_en] = {
-                "en": r["City_EN"],
-                "ar": r["City_AR"],
-                "projects": []
-            }
-        data[city_en]["projects"].append({
-            "en": r["Project_EN"],
-            "ar": r["Project_AR"],
-            "odoo": r["Odoo"]
-        })
-    return data
+    try:
+        rows = PROJECTS_SHEET.get_all_records()
+        data = {}
+        for r in rows:
+            city_en = r["City_EN"]
+            if city_en not in data:
+                data[city_en] = {
+                    "en": r["City_EN"],
+                    "ar": r["City_AR"],
+                    "projects": []
+                }
+            data[city_en]["projects"].append({
+                "en": r["Project_EN"],
+                "ar": r["Project_AR"],
+                "odoo": r["Odoo"]
+            })
+        return data
+    except Exception as e:
+        print(f"Error loading projects: {e}")
+        return {}
 
 projects = load_projects()
 
 # ================= TRANSLATION =================
 def to_en(text):
+    if not text: return ""
     try:
         return GoogleTranslator(source='auto', target='en').translate(text)
     except:
@@ -92,11 +100,15 @@ def upload_to_drive(file_path, filename):
         media_body=media,
         fields="id"
     ).execute()
+    
     file_id = file["id"]
+    
+    # جعل الصورة قابلة للمشاهدة لأي حد معاه اللينك
     drive_service.permissions().create(
         fileId=file_id,
         body={"role": "reader", "type": "anyone"}
     ).execute()
+    
     return f"https://drive.google.com/file/d/{file_id}/view"
 
 # ================= MESSAGES =================
@@ -118,6 +130,7 @@ def t(key, lang):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_data[user_id] = {"step": "language", "photos": []}
+    
     keyboard = [
         [
             InlineKeyboardButton("English", callback_data="lang_en"),
@@ -134,7 +147,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-    data = user_data.setdefault(user_id, {})
+    data = user_data.setdefault(user_id, {"photos": []})
     cb = query.data
 
     if cb.startswith("lang_"):
@@ -158,13 +171,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["project"] = project_en
         data["odoo"] = odoo
         data["step"] = "work"
-        data["photos"] = []
         await query.message.reply_text(t("write_work", data["language"]))
         return
 
     if cb == "photo_more":
         data["step"] = "photo_upload"
-        await query.message.reply_text("📸 Send photo")
+        await query.message.reply_text("📸 Send photo now...")
         return
 
     if cb == "photo_done":
@@ -177,7 +189,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in user_data: return
     data = user_data[user_id]
 
-    if data["step"] == "name":
+    if data.get("step") == "name":
         data["name"] = update.message.text
         data["username"] = update.message.from_user.username
         data["telegram_id"] = user_id
@@ -187,71 +199,78 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t("select_city", data["language"]), reply_markup=InlineKeyboardMarkup(buttons))
         return
 
-    if data["step"] == "work":
+    if data.get("step") == "work":
         data["work"] = update.message.text
         data["step"] = "issues"
         await update.message.reply_text(t("write_issues", data["language"]))
         return
 
-    if data["step"] == "issues":
+    if data.get("step") == "issues":
         data["issues"] = update.message.text
         data["step"] = "photo_choice"
         keyboard = [[InlineKeyboardButton("Yes 📸", callback_data="photo_more"), InlineKeyboardButton("No ❌", callback_data="photo_done")]]
         await update.message.reply_text(t("ask_photo", data["language"]), reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    if data["step"] == "photo_upload":
+    if data.get("step") == "photo_upload":
         if update.message.photo:
+            msg = await update.message.reply_text("⏳ Uploading to Drive...")
             file = await update.message.photo[-1].get_file()
-            safe_project = data["project"].replace(" ", "_")
+            
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            filename = f"{safe_project}_{timestamp}.jpg"
-            folder = "photos"
-            os.makedirs(folder, exist_ok=True)
-            file_path = os.path.join(folder, filename)
+            filename = f"Photo_{user_id}_{timestamp}.jpg"
+            file_path = filename # تخزين مؤقت في الفولدر الرئيسي
+            
             await file.download_to_drive(file_path)
             
-            # رفع الصورة لجوجل درايف فوراً وأخذ الرابط
             drive_link = upload_to_drive(file_path, filename)
             data.setdefault("photos", []).append(drive_link)
             
-            # مسح الصورة من سيرفر ريندر لتوفير المساحة
-            os.remove(file_path)
+            if os.path.exists(file_path):
+                os.remove(file_path)
 
-            await update.message.reply_text(
-                "📸 Photo Uploaded to Drive",
+            await msg.edit_text(
+                "✅ Photo Uploaded!",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("➕ Add more", callback_data="photo_more"), InlineKeyboardButton("✅ Done", callback_data="photo_done")]
+                    [InlineKeyboardButton("➕ Add more", callback_data="photo_more"), InlineKeyboardButton("✅ Finish", callback_data="photo_done")]
                 ])
             )
 
 # ================= SAVE =================
-async def save_report(user_id, update):
+async def save_report(user_id, query):
     data = user_data[user_id]
+    
+    # رسالة انتظار
+    waiting_msg = await query.message.reply_text("💾 Saving data to Google Sheets...")
+    
     base_row = [
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        data.get("name"),
-        data.get("username"),
-        data.get("telegram_id"),
-        data.get("language"),
-        data.get("city"),
-        data.get("project"),
-        data.get("odoo"),
-        data.get("work"),
-        to_en(data.get("work")),
-        data.get("issues"),
-        to_en(data.get("issues")),
+        data.get("name", ""),
+        data.get("username", ""),
+        data.get("telegram_id", ""),
+        data.get("language", ""),
+        data.get("city", ""),
+        data.get("project", ""),
+        data.get("odoo", ""),
+        data.get("work", ""),
+        to_en(data.get("work", "")),
+        data.get("issues", ""),
+        to_en(data.get("issues", "")),
     ]
 
-    if not data.get("photos"):
-        LOG_SHEET.append_row(base_row + [""])
-    else:
-        # وضع كل الروابط في خلية واحدة مفصولة بفاصلة أو صفوف منفصلة (حسب رغبتك)
-        # هنا سأجعلها في صفوف منفصلة كما كان كودك الأصلي
-        for photo_link in data["photos"]:
-            LOG_SHEET.append_row(base_row + [photo_link])
+    try:
+        if not data.get("photos"):
+            LOG_SHEET.append_row(base_row + ["No Photos"])
+        else:
+            # لو فيه صور، هيحط كل الصور في نفس الصف مفصولين بمسافة عشان ميعملش زحمة صفوف
+            all_photos = "\n".join(data["photos"])
+            LOG_SHEET.append_row(base_row + [all_photos])
 
-    await update.effective_message.reply_text("✅ Saved successfully to Google Sheets & Drive")
+        await waiting_msg.edit_text("✅ Done! Report saved successfully.")
+    except Exception as e:
+        await waiting_msg.edit_text(f"❌ Error saving to sheet: {e}")
+
+    # تصفير بيانات المستخدم للعملية الجاية
     user_data[user_id] = {"step": "language", "photos": []}
 
 # ================= APP =================
