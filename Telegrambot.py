@@ -3,6 +3,9 @@ import json
 import gspread
 import asyncio
 import logging
+import http.server
+import socketserver
+import threading
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 from deep_translator import GoogleTranslator
@@ -16,19 +19,31 @@ from telegram.ext import (
     ContextTypes
 )
 
-# إعدادات التسجيل لمراقبة الأخطاء
+# 1. إعدادات التسجيل لمراقبة الأخطاء
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 # ================= CONFIGURATION =================
 TOKEN = "8468978393:AAGS2tu8Xj1O7bUOExicaWPGgFhcokLNLJo"
 GROUP_CHAT_ID = "-5104938886"
 
+# ================= 2. DUMMY SERVER FOR RENDER =================
+# هذا الجزء يمنع Render من إغلاق البوت بسبب عدم وجود Port مفتوح
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 8080))
+    handler = http.server.SimpleHTTPRequestHandler
+    try:
+        with socketserver.TCPServer(("", port), handler) as httpd:
+            print(f"🌍 Dummy server active on port {port}")
+            httpd.serve_forever()
+    except Exception as e:
+        print(f"ℹ️ Dummy Server Info: {e}")
+
 # ================= GOOGLE SHEETS SETUP =================
 def connect_google():
     try:
         raw_json = os.environ.get("GSPREAD_JSON", "").strip()
         if not raw_json:
-            print("⚠️ GSPREAD_JSON is missing! Sheets functionality will be disabled.")
+            print("⚠️ GSPREAD_JSON is missing!")
             return None, None
             
         creds_info = json.loads(raw_json)
@@ -41,7 +56,7 @@ def connect_google():
         spreadsheet = client.open("Daily Summary")
         return spreadsheet.worksheet("Projects"), spreadsheet.sheet1
     except Exception as e:
-        print(f"⚠️ Google Sheets Connection Error: {e}")
+        print(f"❌ Google Connection Error: {e}")
         return None, None
 
 PROJECTS_SHEET, LOG_SHEET = connect_google()
@@ -106,6 +121,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.get("step") == "name":
         data.update({"name": update.message.text, "username": update.message.from_user.username, "step": "city"})
         lang = "ar" if data["language"] == "عربي" else "en"
+        
+        # التأكد من تحميل المشاريع
+        global projects
+        if not projects: projects = load_projects()
+        
+        if not projects:
+            await update.message.reply_text("⚠️ No projects found in Sheets!")
+            return
+
         buttons = [[InlineKeyboardButton(projects[c][lang], callback_data=f"city|{c}")] for c in projects]
         await update.message.reply_text("Select City / اختر المدينة:", reply_markup=InlineKeyboardMarkup(buttons))
     elif data.get("step") == "work":
@@ -123,7 +147,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def save_report(user_id, context, query):
     data = user_data[user_id]
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cap = f"👷‍♂️ Worker: {data.get('name')}\n🏗 Project: {data.get('project')}\n📍 City: {data.get('city')}\n📝 Work: {data.get('work')}"
+    cap = f"👷‍♂️ Worker: {data.get('name')}\n🏗 Project: {data.get('project')}\n📍 City: {data.get('city')}\n📝 Work: {data.get('work')}\n⚠️ Issues: {data.get('issues')}"
     
     try:
         if data["photos"]:
@@ -132,26 +156,30 @@ async def save_report(user_id, context, query):
         
         if LOG_SHEET:
             LOG_SHEET.append_row([date_str, data.get('name'), data.get('username'), user_id, data.get('language'), data.get('city'), data.get('project'), data.get('odoo'), data.get('work'), "", data.get('issues'), "", "Sent"])
-        await query.message.reply_text("✅ Saved!")
+        await query.message.reply_text("✅ Saved successfully / تم الحفظ بنجاح")
     except Exception as e:
-        await query.message.reply_text(f"⚠️ Error: {e}")
+        await query.message.reply_text(f"⚠️ Error during save: {e}")
     user_data[user_id] = {"step": "language", "photos": []}
 
-# ================= RUN MODIFIED FOR PYTHON 3.14 / RENDER =================
+# ================= RUN =================
 async def main():
-    # بناء التطبيق يدوياً وتجاوز الـ Updater التلقائي
+    # 3. تشغيل السيرفر الوهمي في Thread مستقل
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+
+    # بناء التطبيق
     app = ApplicationBuilder().token(TOKEN).build()
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
     
-    print("🚀 Bot is starting manually...")
+    print("🚀 Bot is starting with Dummy Server...")
+    
+    # تشغيل البوت يدوياً لتجنب مشاكل الإصدارات على ريندر
     async with app:
         await app.initialize()
         await app.start()
-        # استخدام التحديثات يدوياً لتجنب خطأ بايثون 3.14
         await app.updater.start_polling(drop_pending_updates=True)
-        # إبقاء البوت يعمل
         while True:
             await asyncio.sleep(1000)
 
