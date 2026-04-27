@@ -19,7 +19,10 @@ from telegram.ext import (
 import gspread
 from google.oauth2.service_account import Credentials
 
-# ================= 1. LOGGING & DUMMY SERVER =================
+# ================= 1. CONFIGURATION =================
+# حطينا الرقم هنا مباشرة عشان نخلص من وجع الدماغ بتاع الريندر
+GROUP_CHAT_ID = -10023958795497  # تم التأكد من الرقم (يجب أن يبدأ بـ -100)
+
 logging.basicConfig(level=logging.INFO)
 
 def run_dummy_server():
@@ -30,8 +33,8 @@ def run_dummy_server():
 
 # ================= 2. ENV VARIABLES =================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-GROUP_CHAT_ID = str(os.environ.get("GROUP_CHAT_ID")).strip()
 SHEET_NAME = os.environ.get("SHEET_NAME")
+
 # ================= 3. GOOGLE SHEETS SETUP =================
 def get_sheets_client():
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -88,7 +91,12 @@ T = {
 # ================= 6. HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    user_data[uid] = {"photos": [], "step": "lang", "tg_id": uid, "username": update.effective_user.username or "None"}
+    user_data[uid] = {
+        "photos": [], 
+        "step": "lang", 
+        "tg_id": uid, 
+        "username": update.effective_user.username or "None"
+    }
     kb = [[InlineKeyboardButton("English", callback_data="l_en"), InlineKeyboardButton("عربي", callback_data="l_ar")]]
     await update.message.reply_text("Language / اللغة:", reply_markup=InlineKeyboardMarkup(kb))
 
@@ -108,7 +116,8 @@ async def btn_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif d.startswith("c|"):
         city = d.split("|")[1]
         u.update({"city": city, "step": "proj"})
-        projs = load_all_projects().get(city, {}).get("projects", [])
+        all_p = load_all_projects()
+        projs = all_p.get(city, {}).get("projects", [])
         l_idx = "ar" if lang == "Arabic" else "en"
         btns = [[InlineKeyboardButton(p[l_idx], callback_data=f"p|{city}|{p['en']}|{p['odoo']}")] for p in projs]
         await query.message.reply_text(T[lang]["p"], reply_markup=InlineKeyboardMarkup(btns))
@@ -119,7 +128,6 @@ async def btn_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(T[lang]["w"])
 
     elif d == "done":
-        # منع الضغط المتكرر
         if u.get("step") == "saving": return
         u["step"] = "saving"
         await finalize_report(uid, query, context)
@@ -130,11 +138,8 @@ async def msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = user_data[uid]
     lang = u.get("lang", "English")
 
-    # --- معالجة الصور ---
     if update.message.photo and u.get("step") == "photo":
-        # بنحفظ الـ ID فقط بدون تحميل عشان السرعة
         u["photos"].append(update.message.photo[-1].file_id)
-        # متبعتبش رسالة تأكيد لكل صورة عشان ميعلقش، العامل هيبعت الصور ويدوس Done
         return
 
     txt = update.message.text
@@ -167,36 +172,37 @@ async def finalize_report(uid, query, context):
         f"🆔 *ID:* `{u.get('tg_id')}` | @{u.get('username')}\n"
         f"🏙 *City:* {u.get('city')}\n"
         f"🏗 *Project:* {u.get('project')}\n"
+        f"📌 *Odoo:* {u.get('odoo')}\n"
         f"📝 *Work:* {u.get('work')}\n"
         f"⚠️ *Issues:* {u.get('issue')}\n"
         f"⏰ {date_now}"
     )
 
     try:
-        # 1. إرسال النص
+        # 1. إرسال النص (استخدام الرقم المباشر)
         await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=report, parse_mode="Markdown")
         
-        # 2. إرسال الصور كألبوم
-        if u["photos"]:
-            # التيليجرام بياخد بحد أقصى 10 صور في الألبوم
+        # 2. إرسال الصور كألبوم (فقط لو فيه صور)
+        if u.get("photos"):
             for i in range(0, len(u["photos"]), 10):
                 batch = [InputMediaPhoto(f_id) for f_id in u["photos"][i:i+10]]
                 await context.bot.send_media_group(chat_id=GROUP_CHAT_ID, media=batch)
         
-        # 3. حفظ في الشيت
+        # 3. حفظ في جوجل شيت
         if LOG_SHEET:
             LOG_SHEET.append_row([
-                date_now, u.get("name"), u.get("tg_id"), u.get("username"),
-                u.get("city"), u.get("project"), u.get("odoo"), u.get("work"), u.get("issue"), len(u["photos"])
+                date_now, u.get("name"), u.get("tg_id"), f"@{u.get('username')}",
+                u.get("city"), u.get("project"), u.get("odoo"), u.get("work"), u.get("issue"), len(u.get("photos", []))
             ])
             
-        await query.message.reply_text(T[u["lang"]]["d"])
+        await query.message.reply_text(T[u.get("lang", "English")]["d"])
     except Exception as e:
         logging.error(f"Finalize Error: {e}")
-        await query.message.reply_text("❌ Error saving report.")
+        # إذا فشل بسبب الـ ID، هيقولك السبب هنا في التيليجرام
+        await query.message.reply_text(f"❌ Error: {e}")
 
     # ريست
-    user_data[uid] = {"photos": [], "step": "lang"}
+    user_data[uid] = {"photos": [], "step": "lang", "tg_id": uid, "username": u.get('username')}
 
 if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
