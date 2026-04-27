@@ -1,6 +1,7 @@
 import os
 import json
 import gspread
+import asyncio
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 from deep_translator import GoogleTranslator
@@ -16,33 +17,37 @@ from telegram.ext import (
 
 # ================= CONFIGURATION =================
 TOKEN = "8468978393:AAH3cp0fA9kltxy5a1kzdfj_NuJwTiVsamA"
-GROUP_CHAT_ID = "-5104938886" # ايدي الجروب اللي هتوصل عليه الصور
-
-# جلب بيانات جوجل (للشيت فقط)
-# بما إننا لسه بنستخدم الشيت، استخدم طريقة المفتاح المباشر عشان نتخطى الـ Signature Error
-google_creds_json = os.environ.get("GSPREAD_JSON")
+GROUP_CHAT_ID = "-100234567890" # تأكد من وضع الـ ID الصحيح هنا (يبدأ بـ -100)
 
 # ================= GOOGLE SHEETS SETUP =================
-try:
-    creds_info = json.loads(google_creds_json)
-    if "private_key" in creds_info:
-        creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
-    
-    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_info(creds_info, scopes=scope)
-    client = gspread.authorize(creds)
-    
-    spreadsheet = client.open("Daily Summary")
-    PROJECTS_SHEET = spreadsheet.worksheet("Projects")
-    LOG_SHEET = spreadsheet.sheet1
-    print("✅ Connected to Google Sheets")
-except Exception as e:
-    print(f"❌ Sheets Connection Error: {e}")
+def connect_google():
+    try:
+        creds_json = os.environ.get("GSPREAD_JSON")
+        if not creds_json:
+            print("❌ GSPREAD_JSON environment variable is empty!")
+            return None, None
+            
+        creds_info = json.loads(creds_json)
+        if "private_key" in creds_info:
+            creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
+        
+        scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        creds = Credentials.from_service_account_info(creds_info, scopes=scope)
+        client = gspread.authorize(creds)
+        
+        spreadsheet = client.open("Daily Summary")
+        return spreadsheet.worksheet("Projects"), spreadsheet.sheet1
+    except Exception as e:
+        print(f"❌ Sheets Connection Error: {e}")
+        return None, None
+
+PROJECTS_SHEET, LOG_SHEET = connect_google()
 
 # ================= MEMORY & PROJECTS =================
 user_data = {}
 
 def load_projects():
+    if not PROJECTS_SHEET: return {}
     try:
         rows = PROJECTS_SHEET.get_all_records()
         data = {}
@@ -61,7 +66,7 @@ def to_en(text):
     try: return GoogleTranslator(source='auto', target='en').translate(text)
     except: return text
 
-# ================= START & HANDLERS =================
+# ================= HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_data[user_id] = {"step": "language", "photos": []}
@@ -122,47 +127,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.get("step") == "photo_upload":
         if update.message.photo:
-            # هنخزن الـ file_id بتاع الصورة عشان نبعتها للجروب بعدين
             data["photos"].append(update.message.photo[-1].file_id)
             keyboard = [[InlineKeyboardButton("➕ Add more", callback_data="photo_more"), InlineKeyboardButton("✅ Finish", callback_data="photo_done")]]
-            await update.message.reply_text("✅ Photo received / تم استلام الصورة", reply_markup=InlineKeyboardMarkup(keyboard))
+            await update.message.reply_text("✅ Photo received", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ================= SAVE & FORWARD =================
 async def save_report(user_id, context, query):
     data = user_data[user_id]
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # 1. إرسال للجروب (الأرشيف)
     caption = (
-        f"👷‍♂️ *Worker:* {data.get('name')}\n"
-        f"🏗 *Project:* {data.get('project')}\n"
-        f"📍 *City:* {data.get('city')}\n"
-        f"📅 *Date:* {date_str}\n"
-        f"📝 *Work:* {data.get('work')}\n"
-        f"⚠️ *Issues:* {data.get('issues')}"
+        f"👷‍♂️ Worker: {data.get('name')}\n"
+        f"🏗 Project: {data.get('project')}\n"
+        f"📍 City: {data.get('city')}\n"
+        f"📅 Date: {date_str}\n"
+        f"📝 Work: {data.get('work')}\n"
+        f"⚠️ Issues: {data.get('issues')}"
     )
 
-    if data["photos"]:
-        for photo_id in data["photos"]:
-            await context.bot.send_photo(chat_id=GROUP_CHAT_ID, photo=photo_id, caption=caption, parse_mode="Markdown")
-    else:
-        await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=f"🔔 *Report without photos:*\n{caption}", parse_mode="Markdown")
-
-    # 2. الحفظ في جوجل شيت
     try:
-        row = [date_str, data.get('name'), data.get('username'), user_id, data.get('language'), 
-               data.get('city'), data.get('project'), data.get('odoo'), data.get('work'), 
-               to_en(data.get('work')), data.get('issues'), to_en(data.get('issues')), "Sent to Telegram Group"]
-        LOG_SHEET.append_row(row)
-        await query.message.reply_text("✅ Saved & Archive updated!")
+        if data["photos"]:
+            for photo_id in data["photos"]:
+                await context.bot.send_photo(chat_id=GROUP_CHAT_ID, photo=photo_id, caption=caption)
+        else:
+            await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=f"🔔 Report:\n{caption}")
+
+        if LOG_SHEET:
+            row = [date_str, data.get('name'), data.get('username'), user_id, data.get('language'), 
+                   data.get('city'), data.get('project'), data.get('odoo'), data.get('work'), 
+                   to_en(data.get('work')), data.get('issues'), to_en(data.get('issues')), "Sent to Group"]
+            LOG_SHEET.append_row(row)
+            
+        await query.message.reply_text("✅ Done! Report saved.")
     except Exception as e:
-        await query.message.reply_text(f"⚠️ Saved to Group but Sheet Error: {e}")
+        await query.message.reply_text(f"⚠️ Error: {e}")
 
     user_data[user_id] = {"step": "language", "photos": []}
 
 # ================= RUN =================
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(button_handler))
-app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
-app.run_polling()
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
+    
+    # الطريقة المستقرة للتشغيل في البيئات الحديثة
+    print("🤖 Bot is starting...")
+    app.run_polling(drop_pending_updates=True)
