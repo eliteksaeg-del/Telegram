@@ -30,8 +30,7 @@ def run_dummy_server():
 
 # ================= 2. ENV VARIABLES =================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID")
-SHEET_NAME = os.environ.get("SHEET_NAME")
+GROUP_CHAT_ID = str(os.environ.get("GROUP_CHAT_ID")).strip()SHEET_NAME = os.environ.get("SHEET_NAME")
 
 # ================= 3. GOOGLE SHEETS SETUP =================
 def get_sheets_client():
