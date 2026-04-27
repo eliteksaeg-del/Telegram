@@ -21,7 +21,7 @@ from google.oauth2.service_account import Credentials
 
 # ================= 1. CONFIGURATION =================
 # حطينا الرقم هنا مباشرة عشان نخلص من وجع الدماغ بتاع الريندر
-GROUP_CHAT_ID = -10023958795497  # تم التأكد من الرقم (يجب أن يبدأ بـ -100)
+GROUP_CHAT_ID = -1003958795497  # تم التأكد من الرقم (يجب أن يبدأ بـ -100)
 
 logging.basicConfig(level=logging.INFO)
 
