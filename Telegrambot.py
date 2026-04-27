@@ -22,7 +22,7 @@ from telegram.ext import (
 logging.basicConfig(level=logging.INFO)
 
 # ================= CONFIG =================
-TOKEN = "PUT_YOUR_TOKEN_HERE"
+TOKEN = "8468978393:AAGS2tu8Xj1O7bUOExicaWPGgFhcokLNLJo"
 GROUP_CHAT_ID = "-5104938886"
 
 # ================= KEEP ALIVE =================
