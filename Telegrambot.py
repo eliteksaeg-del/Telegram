@@ -59,25 +59,74 @@ except Exception as e:
     print(f"❌ Connection Error: {e}")
 
 # ================= 4. LOAD DATA =================
+# ================= 4. LOAD DATA (تعديل لضمان القراءة) =================
 def load_all_projects():
     try:
-        rows = PROJECTS_SHEET.get_all_records()
+        # بنعيد الاتصال للتأكد
+        client = get_sheets_client()
+        temp_sheet = client.open(SHEET_NAME).worksheet("Projects")
+        rows = temp_sheet.get_all_records()
         data = {}
         for r in rows:
             city = str(r.get("City_EN", "")).strip()
             if city:
                 if city not in data:
-                    data[city] = {"en": city, "ar": r.get("City_AR", city), "projects": []}
+                    data[city] = {"en": city, "ar": str(r.get("City_AR", city)), "projects": []}
                 data[city]["projects"].append({
-                    "en": r.get("Project_EN", ""),
-                    "ar": r.get("Project_AR", ""),
-                    "odoo": r.get("Odoo", "")
+                    "en": str(r.get("Project_EN", "")),
+                    "ar": str(r.get("Project_AR", "")),
+                    "odoo": str(r.get("Odoo", ""))
                 })
+        print(f"✅ Successfully loaded {len(data)} cities")
         return data
-    except: return {}
+    except Exception as e:
+        print(f"❌ Error inside load_all_projects: {e}")
+        return {}
 
-ALL_PROJECTS = load_all_projects()
-user_data = {}
+# ================= 6. UPDATED msg_handler =================
+async def msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid not in user_data: return
+    u = user_data[uid]
+    
+    if update.message.photo and u.get("step") == "photo":
+        u["photos"].append(update.message.photo[-1].file_id)
+        await update.message.reply_text("✅ Photo received. Send more or press Done.")
+        return
+
+    txt = update.message.text
+    if not txt: return
+    lang = u.get("lang", "English")
+
+    if u.get("step") == "name":
+        u.update({"name": txt, "step": "city"})
+        
+        # 🔥 أهم تعديل: بنحمل البيانات هنا عشان نضمن وجودها
+        current_projects = load_all_projects()
+        
+        if not current_projects:
+            await update.message.reply_text("❌ Error: No cities found in 'Projects' sheet. Please check column names.")
+            return
+
+        lang_idx = "ar" if lang == "Arabic" else "en"
+        # إنشاء الأزرار
+        btns = []
+        for c_key, c_info in current_projects.items():
+            btns.append([InlineKeyboardButton(c_info[lang_idx], callback_data=f"c|{c_key}")])
+        
+        await update.message.reply_text(
+            T[lang]["c"], 
+            reply_markup=InlineKeyboardMarkup(btns)
+        )
+
+    elif u.get("step") == "work":
+        u.update({"work": txt, "step": "issue"})
+        await update.message.reply_text(T[lang]["i"])
+
+    elif u.get("step") == "issue":
+        u.update({"issue": txt, "step": "photo"})
+        kb = [[InlineKeyboardButton("✅ Done / إنهاء", callback_data="done")]]
+        await update.message.reply_text(T[lang]["ph"], reply_markup=InlineKeyboardMarkup(kb))
 
 # ================= 5. TEXTS =================
 T = {
