@@ -38,23 +38,67 @@ def run_dummy_server():
 def connect_google():
     try:
         raw_json = os.environ.get("GSPREAD_JSON", "").strip()
-        if not raw_json:
-            return None, None
+        if not raw_json: return None, None
         creds_info = json.loads(raw_json)
         if "private_key" in creds_info:
             creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
         scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(creds_info, scopes=scope)
         client = gspread.authorize(creds)
-        
-        # التأكد من اسم الملف
         spreadsheet = client.open("Daily Summary")
         return spreadsheet.worksheet("Projects"), spreadsheet.sheet1
     except Exception as e:
-        print(f"❌ Google Connection Error: {e}")
+        print(f"❌ Connection Error: {e}")
         return None, None
 
-# ================= TEXTS DICTIONARY =================
+def get_projects_data():
+    proj_sheet, _ = connect_google()
+    if not proj_sheet: return {}
+    try:
+        # قراءة كل الصفوف كقائمة لتجنب مشاكل العناوين (Headers)
+        all_values = proj_sheet.get_all_values()
+        if len(all_values) < 2: return {} # الشيت فاضي
+        
+        headers = all_values[0] # أول صف (العناوين)
+        rows = all_values[1:]   # البيانات
+        
+        # تحديد أماكن الأعمدة ديناميكياً
+        def get_idx(name):
+            try: return next(i for i, h in enumerate(headers) if name.lower() in h.lower())
+            except: return None
+
+        c_en_idx = get_idx("City_EN")
+        c_ar_idx = get_idx("City_AR")
+        p_en_idx = get_idx("Project_EN")
+        p_ar_idx = get_idx("Project_AR")
+        odoo_idx = get_idx("Odoo")
+
+        data = {}
+        for r in rows:
+            # التأكد من وجود بيانات في الصف
+            if len(r) <= max(c_en_idx or 0, p_en_idx or 0): continue
+            
+            city_en = r[c_en_idx].strip() if c_en_idx is not None else ""
+            if not city_en: continue
+
+            if city_en not in data:
+                data[city_en] = {
+                    "en": city_en,
+                    "ar": r[c_ar_idx].strip() if c_ar_idx is not None else city_en,
+                    "projects": []
+                }
+            
+            data[city_en]["projects"].append({
+                "en": r[p_en_idx].strip() if p_en_idx is not None else "",
+                "ar": r[p_ar_idx].strip() if p_ar_idx is not None else "",
+                "odoo": r[odoo_idx].strip() if odoo_idx is not None else ""
+            })
+        return data
+    except Exception as e:
+        print(f"❌ Error parsing sheets: {e}")
+        return {}
+
+# ================= TEXTS =================
 TEXTS = {
     "en": {
         "ask_name": "Please enter your name:",
@@ -63,47 +107,26 @@ TEXTS = {
         "ask_work": "What work was done today?",
         "ask_issues": "Any issues faced?",
         "ask_photo": "Do you want to upload a photo?",
-        "send_photo": "Please send the photo now:",
-        "done": "✅ Report saved successfully!",
-        "no_proj": "⚠️ No projects found in the 'Projects' sheet!",
-        "btn_yes": "Yes 📸", "btn_no": "No ❌", "btn_finish": "✅ Finish", "btn_more": "➕ Add More"
+        "send_photo": "Please send the photo:",
+        "done": "✅ Report saved!",
+        "no_proj": "⚠️ No projects found!",
+        "btn_yes": "Yes 📸", "btn_no": "No ❌", "btn_finish": "✅ Finish", "btn_more": "➕ More"
     },
     "ar": {
-        "ask_name": "من فضلك اكتب اسمك:",
+        "ask_name": "اكتب اسمك:",
         "ask_city": "اختر المدينة:",
         "ask_project": "اختر المشروع:",
-        "ask_work": "ما هو الشغل المنجز اليوم؟",
-        "ask_issues": "هل واجهت أي مشاكل؟",
+        "ask_work": "ما هو الشغل المنجز؟",
+        "ask_issues": "هل توجد مشاكل؟",
         "ask_photo": "هل تريد رفع صورة؟",
-        "send_photo": "من فضلك ارسل الصورة الآن:",
-        "done": "✅ تم حفظ التقرير بنجاح!",
-        "no_proj": "⚠️ لم يتم العثور على مشاريع في شيت Projects!",
+        "send_photo": "ارسل الصورة الآن:",
+        "done": "✅ تم الحفظ!",
+        "no_proj": "⚠️ لا توجد مشاريع!",
         "btn_yes": "نعم 📸", "btn_no": "لا ❌", "btn_finish": "✅ إنهاء", "btn_more": "➕ صورة أخرى"
     }
 }
 
 user_data = {}
-
-def get_projects_data():
-    proj_sheet, _ = connect_google()
-    if not proj_sheet: return {}
-    try:
-        rows = proj_sheet.get_all_records()
-        data = {}
-        for r in rows:
-            c_en = str(r.get("City_EN", "")).strip()
-            if c_en:
-                if c_en not in data:
-                    data[c_en] = {"en": c_en, "ar": str(r.get("City_AR", c_en)), "projects": []}
-                data[c_en]["projects"].append({
-                    "en": str(r.get("Project_EN", "")),
-                    "ar": str(r.get("Project_AR", "")),
-                    "odoo": str(r.get("Odoo", ""))
-                })
-        return data
-    except Exception as e:
-        print(f"Error reading rows: {e}")
-        return {}
 
 # ================= HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,9 +140,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-    if user_id not in user_data: user_data[user_id] = {"photos": []}
-    data = user_data[user_id]
-
+    data = user_data.setdefault(user_id, {"photos": []})
     cb = query.data
     lang = data.get("lang", "en")
 
@@ -129,21 +150,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(TEXTS[data["lang"]]["ask_name"])
 
     elif cb.startswith("city|"):
-        city_en = cb.split("|")[1]
-        data["city_en"] = city_en
+        city_key = cb.split("|")[1]
+        data["city_key"] = city_key
         data["step"] = "project"
         all_projs = get_projects_data()
         
         btns = []
-        for p in all_projs.get(city_en, {}).get("projects", []):
+        for p in all_projs.get(city_key, {}).get("projects", []):
             label = p[data["lang"]] if p[data["lang"]] else p["en"]
-            btns.append([InlineKeyboardButton(label, callback_data=f"proj|{p['en']}|{p['odoo']}")] )
+            btns.append([InlineKeyboardButton(label, callback_data=f"proj|{p['en']}|{p['odoo']}")])
         
         await query.message.edit_text(TEXTS[data["lang"]]["ask_project"], reply_markup=InlineKeyboardMarkup(btns))
 
     elif cb.startswith("proj|"):
         _, p_en, odoo = cb.split("|")
-        data["project_en"], data["odoo"], data["step"] = p_en, odoo, "work"
+        data.update({"project_en": p_en, "odoo": odoo, "step": "work"})
         await query.message.edit_text(TEXTS[data["lang"]]["ask_work"])
 
     elif cb == "photo_yes":
@@ -155,8 +176,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id not in user_data: return
-    data = user_data[user_id]
+    data = user_data.get(user_id)
+    if not data: return
     lang = data.get("lang", "en")
 
     if data.get("step") == "name":
@@ -191,26 +212,22 @@ async def save_report(update, context, data):
     lang = data.get("lang", "en")
     _, log_sheet = connect_google()
     
-    caption = (f"👷‍♂️ Worker: {data.get('name')}\n"
-               f"📍 City: {data.get('city_en')}\n"
-               f"🏗 Project: {data.get('project_en')}\n"
-               f"📝 Work: {data.get('work')}\n"
-               f"⚠️ Issues: {data.get('issues')}")
+    caption = f"👷‍♂️ Worker: {data.get('name')}\n📍 City: {data.get('city_key')}\n🏗 Project: {data.get('project_en')}\n📝 Work: {data.get('work')}\n⚠️ Issues: {data.get('issues')}"
     
     try:
-        if data["photos"]:
+        if data.get("photos"):
             for p_id in data["photos"]:
                 await context.bot.send_photo(chat_id=GROUP_CHAT_ID, photo=p_id, caption=caption)
         else:
             await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=caption)
         
         if log_sheet:
-            log_sheet.append_row([datetime.now().strftime("%Y-%m-%d %H:%M"), data.get('name'), "", user_id, lang, data.get('city_en'), data.get('project_en'), data.get('odoo'), data.get('work'), "", data.get('issues'), "", "Sent"])
+            log_sheet.append_row([datetime.now().strftime("%Y-%m-%d %H:%M"), data.get('name'), "", user_id, lang, data.get('city_key'), data.get('project_en'), data.get('odoo'), data.get('work'), "", data.get('issues'), "", "Sent"])
         
         msg = TEXTS[lang]["done"]
         if update.callback_query: await update.callback_query.message.edit_text(msg)
         else: await update.message.reply_text(msg)
-    except Exception as e: print(f"Save Error: {e}")
+    except Exception as e: print(f"Error: {e}")
     user_data[user_id] = {"photos": []}
 
 async def main():
@@ -219,7 +236,6 @@ async def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
-    print("🚀 Bot is LIVE...")
     async with app:
         await app.initialize()
         await app.start()
