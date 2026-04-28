@@ -80,11 +80,11 @@ user_data = {}
 T = {
     "English": {
         "n": "Enter name:", "c": "Select City:", "p": "Select Project:",
-        "w": "Work done:", "i": "Issues:", "ph": "Send photos now, then press ✅ Done:", "d": "Saved ✅"
+        "w": "Work done with building No.:", "i": "Issues faced on site today:", "ph": "Send photos now, then press ✅ Done:", "d": "Saved ✅"
     },
     "Arabic": {
         "n": "اكتب اسمك:", "c": "اختر المدينة:", "p": "اختر المشروع:",
-        "w": "اكتب الشغل:", "i": "اكتب المشاكل:", "ph": "ارسل الصور الآن، ثم اضغط ✅ إنهاء:", "d": "تم الحفظ ✅"
+        "w": "اكتب الشغل مع توضيح رقم العمارة:", "i": "اكتب المشاكل التي واجهتك اليوم بالموقع:", "ph": "ارسل الصور الآن، ثم اضغط ✅ إنهاء:", "d": "تم الحفظ ✅"
     }
 }
 
